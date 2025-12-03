@@ -320,25 +320,7 @@ for (let i = 0; i < ICEBERG_COUNT; i++) {
   addIceberg(x, z);
 }
 
-/** ========= ESFERA CONTROLADA POR VR ========= */
-let playerSphere; // La esfera que el jugador va a controlar
 
-function createPlayerSphere() {
-  // Geometría de la esfera (tamaño ajustado para ser visible pero no demasiado grande)
-  const sphereGeometry = new THREE.SphereGeometry(0.3, 32, 32);  // Reducir aún más el tamaño de la esfera
-  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000, roughness: 0.5, metalness: 0.1 }); // Color rojo brillante
-
-  // Crear la esfera
-  playerSphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
-  playerSphere.position.set(0, 2.4, 5);  // Elevamos la esfera un poco más en Y (por ejemplo, Y=2.4)
-  playerSphere.castShadow = true;
-  playerSphere.receiveShadow = true;
-
-  world.add(playerSphere); // Agregar la esfera al mundo
-}
-
-// Llamamos a la función para crear la esfera
-createPlayerSphere();
 
 /** ========= MANDO VR: LOCOMOCIÓN + TELEPORT ========= */
 const vrBtn = VRButton.createButton(renderer);
@@ -349,6 +331,25 @@ document.body.appendChild(vrBtn);
 const controllerLeft = renderer.xr.getController(0);
 const controllerRight = renderer.xr.getController(1);
 scene.add(controllerLeft, controllerRight);
+
+// Estado de presión para los controladores
+controllerLeft.isPressing = false;
+controllerRight.isPressing = false;
+
+// Event listeners para detectar presión de botones
+controllerLeft.addEventListener('selectstart', () => {
+  controllerLeft.isPressing = true;
+});
+controllerLeft.addEventListener('selectend', () => {
+  controllerLeft.isPressing = false;
+});
+
+controllerRight.addEventListener('selectstart', () => {
+  controllerRight.isPressing = true;
+});
+controllerRight.addEventListener('selectend', () => {
+  controllerRight.isPressing = false;
+});
 
 const controllerModelFactory = new XRControllerModelFactory();
 const controllerGrip0 = renderer.xr.getControllerGrip(0);
@@ -466,54 +467,47 @@ function segmentIntersectTerrain(a, b) {
   return hits[0]?.point || null;
 }
 
-/** ========= MOVER LA ESFERA CON LOS CONTROLES DE VR ========= */
-function movePlayerSphereWithVR(dt) {
-  const session = renderer.xr.getSession();
-  if (!session) return;
 
-  for (const src of session.inputSources) {
-    if (!src.gamepad) continue;
 
-    // Controlar el movimiento con el stick (ejemplo con el gamepad izquierdo)
-    const axes = src.gamepad.axes;
-    let x = axes[2], y = axes[3];
-    if (x === undefined || y === undefined) { x = axes[0] ?? 0; y = axes[1] ?? 0; }
+// Función de raycasting para detectar la colisión con los árboles
+function checkCollisionWithController(controller) {
+  // Crear un rayo desde el controlador
+  const ray = new THREE.Raycaster();
+  const controllerPosition = controller.position; // Obtiene la posición del controlador
+  const controllerDirection = new THREE.Vector3(0, 0, -1); // Dirección en la que apunta el controlador
 
-    const dead = 0.12;
-    if (Math.abs(x) < dead) x = 0;
-    if (Math.abs(y) < dead) y = 0;
-    if (x === 0 && y === 0) continue;
+  // Aplica la rotación del controlador a la dirección
+  controller.getWorldDirection(controllerDirection);
 
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward);  // Dirección de la cámara
-    forward.y = 0;
-    forward.normalize();
+  ray.ray.origin.copy(controllerPosition); // El origen del rayo es la posición del controlador
+  ray.ray.direction.copy(controllerDirection); // La dirección del rayo es hacia donde apunta el controlador
 
-    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  // Realizamos la intersección con los árboles
+  const treeObjects = trees.map(t => t.object); // Obtener los objetos de los árboles
+  const intersects = ray.intersectObjects(treeObjects, true); // 'true' para recursivo en grupos
 
-    const move = new THREE.Vector3();
-    move.addScaledVector(forward, -y * VR_WALK_SPEED * dt);  // Mover hacia adelante y atrás
-    move.addScaledVector(right, x * VR_STRAFE_SPEED * dt);    // Mover hacia los lados
-
-    // Ajustar a la altura del terreno al mover
-    const next = playerSphere.position.clone().add(move);
-    next.y = getTerrainHeight(next.x, next.z) + 0.5;  // Mantener la esfera sobre el terreno
-    playerSphere.position.copy(next);
+  if (intersects.length > 0) {
+    const treeObject = intersects[0].object; // El primer objeto con el que colisiona
+    // Encontrar el árbol correspondiente en el array
+    const treeIndex = trees.findIndex(t => t.object === treeObject.parent || t.object === treeObject);
+    if (treeIndex !== -1 && controller.isPressing) { // Verificar si se ha presionado el botón del controlador
+      removeTree(treeIndex); // Eliminar el árbol tocado
+    }
   }
 }
 
-/** ========= COMPROBACIÓN DE COLISIÓN CON ÁRBOLES ========= */
-function checkCollisionWithTrees() {
-  trees.forEach(tree => {
-    const treePosition = tree.object.position;
-    const distance = playerSphere.position.distanceTo(treePosition);  // Distancia entre la esfera y el árbol
-
-    // Si la distancia es menor que un umbral, consideramos que hay una colisión
-    if (distance < 1.5) {  // Umbral de colisión (ajustable)
-      console.log('¡Colisión con el árbol!');
-      // Aquí puedes hacer que la esfera rebote o se detenga, o cualquier otro comportamiento
+// Función para eliminar un árbol de la escena
+function removeTree(index) {
+  const tree = trees[index];
+  scene.remove(tree.object); // Remueve el árbol de la escena
+  // Liberar recursos si es necesario
+  tree.object.traverse((child) => {
+    if (child.isMesh) {
+      child.geometry.dispose();
+      child.material.dispose();
     }
   });
+  trees.splice(index, 1); // Elimina el árbol del arreglo
 }
 
 // Locomoción por stick (izquierdo preferentemente)
@@ -561,8 +555,9 @@ renderer.setAnimationLoop(() => {
   if (renderer.xr.isPresenting) {
     vrGamepadMove(dt);
     updateTeleportArc(dt);
-    movePlayerSphereWithVR(dt);
-    checkCollisionWithTrees();
+    // Detectar colisiones con controladores para eliminar árboles
+    checkCollisionWithController(controllerLeft);
+    checkCollisionWithController(controllerRight);
   }
 
   // Actualizar la posición de la cámara para seguir al jugador en ambos modos
