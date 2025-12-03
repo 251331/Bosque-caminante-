@@ -217,23 +217,24 @@ function addRandomTree() {
   const scale = 0.8 + Math.random() * 1.5; // Tamaño aleatorio para cada árbol
 
   const tree = addTree(randomX, randomZ, scale); // Función para agregar el árbol en la escena
-  trees.push({ x: randomX, z: randomZ, scale, object: tree }); // Almacenamos el árbol para manipularlo en el futuro
+  tree.userData = { x: randomX, z: randomZ, scale }; // Almacenamos datos en userData
+  trees.push(tree); // Almacenamos el árbol directamente
 }
 
 // Función para mover los árboles en el camino
 function moveTrees() {
   trees.forEach(tree => {
-    tree.z += 3; // Movimiento de los árboles hacia el lado opuesto (en el eje Z)
+    tree.userData.z += 3; // Movimiento de los árboles hacia el lado opuesto (en el eje Z)
 
     // Reemplazamos los árboles cuando cruzan la zona visible
-    if (tree.z > camera.position.z + 200) {
-      tree.z = camera.position.z - 1000; // Los reseteamos al frente
-      tree.x = Math.random() * pathWidth - pathWidth / 2;
-      tree.scale = 0.8 + Math.random() * 1.5; // Cambio de tamaño aleatorio
+    if (tree.userData.z > camera.position.z + 200) {
+      tree.userData.z = camera.position.z - 1000; // Los reseteamos al frente
+      tree.userData.x = Math.random() * pathWidth - pathWidth / 2;
+      tree.userData.scale = 0.8 + Math.random() * 1.5; // Cambio de tamaño aleatorio
     }
 
     // Actualiza la posición de cada árbol en la escena
-    tree.object.position.set(tree.x, getTerrainHeight(tree.x, tree.z) + 0.5, tree.z);
+    tree.position.set(tree.userData.x, getTerrainHeight(tree.userData.x, tree.userData.z) + 0.5, tree.userData.z);
   });
 }
 
@@ -260,6 +261,8 @@ function getTerrainHeight(x, z) {
 }
 
 const _raycaster = new THREE.Raycaster();
+const raycaster = new THREE.Raycaster(); // Raycaster global para controladores VR
+
 // Iniciar la generación aleatoria de árboles
 scheduleNextTree();
 
@@ -471,43 +474,46 @@ function segmentIntersectTerrain(a, b) {
 
 // Función de raycasting para detectar la colisión con los árboles
 function checkCollisionWithController(controller) {
-  // Crear un rayo desde el controlador
-  const ray = new THREE.Raycaster();
+  // Usar el raycaster global
   const controllerPosition = controller.position; // Obtiene la posición del controlador
   const controllerDirection = new THREE.Vector3(0, 0, -1); // Dirección en la que apunta el controlador
 
   // Aplica la rotación del controlador a la dirección
   controller.getWorldDirection(controllerDirection);
 
-  ray.ray.origin.copy(controllerPosition); // El origen del rayo es la posición del controlador
-  ray.ray.direction.copy(controllerDirection); // La dirección del rayo es hacia donde apunta el controlador
+  raycaster.ray.origin.copy(controllerPosition); // El origen del rayo es la posición del controlador
+  raycaster.ray.direction.copy(controllerDirection); // La dirección del rayo es hacia donde apunta el controlador
 
   // Realizamos la intersección con los árboles
-  const treeObjects = trees.map(t => t.object); // Obtener los objetos de los árboles
-  const intersects = ray.intersectObjects(treeObjects, true); // 'true' para recursivo en grupos
+  const intersects = raycaster.intersectObjects(trees, true); // 'true' para recursivo en grupos
 
   if (intersects.length > 0) {
-    const treeObject = intersects[0].object; // El primer objeto con el que colisiona
-    // Encontrar el árbol correspondiente en el array
-    const treeIndex = trees.findIndex(t => t.object === treeObject.parent || t.object === treeObject);
-    if (treeIndex !== -1 && controller.isPressing) { // Verificar si se ha presionado el botón del controlador
-      removeTree(treeIndex); // Eliminar el árbol tocado
+    const intersectedObject = intersects[0].object; // El primer objeto con el que colisiona
+    // Encontrar el árbol raíz
+    let tree = intersectedObject;
+    while (tree.parent && tree.parent !== scene) {
+      tree = tree.parent;
+    }
+    if (trees.includes(tree) && controller.isPressing) { // Verificar si se ha presionado el botón del controlador
+      removeTree(tree); // Eliminar el árbol tocado
     }
   }
 }
 
 // Función para eliminar un árbol de la escena
-function removeTree(index) {
-  const tree = trees[index];
-  scene.remove(tree.object); // Remueve el árbol de la escena
+function removeTree(tree) {
+  scene.remove(tree); // Remueve el árbol de la escena
   // Liberar recursos si es necesario
-  tree.object.traverse((child) => {
+  tree.traverse((child) => {
     if (child.isMesh) {
       child.geometry.dispose();
       child.material.dispose();
     }
   });
-  trees.splice(index, 1); // Elimina el árbol del arreglo
+  const index = trees.indexOf(tree);
+  if (index !== -1) {
+    trees.splice(index, 1); // Elimina el árbol del arreglo
+  }
 }
 
 // Locomoción por stick (izquierdo preferentemente)
@@ -540,9 +546,9 @@ function vrGamepadMove(dt) {
     move.addScaledVector(right,   x * VR_STRAFE_SPEED * dt);
 
     // Ajustar a la altura del terreno al mover
-    const next = player.position.clone().add(move);
+    const next = player.clone().add(move);
     next.y = getTerrainHeight(next.x, next.z) + 1.6;
-    player.position.copy(next);
+    player.copy(next);
   }
 }
 
